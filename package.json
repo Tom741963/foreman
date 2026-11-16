@@ -1,0 +1,17 @@
+{
+  "name": "foreman",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "多 Agent 值班台：让 Codex、DSH 等 AI 工具各司其职，人在旁边看着",
+  "scripts": {
+    "start": "node src/server.ts",
+    "serve": "node src/server.ts",
+    "shot": "node scripts/shot.mjs",
+    "test": "node scripts/test.ts",
+    "typecheck": "node node_modules/typescript/bin/tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=22.5"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "$comment": "agent 注册示例。cli 型由 Foreman 启动进程；manual 型由人自己跑，Foreman 只监视任务目录。",
+  "agents": [
+    {
+      "id": "codex",
+      "name": "Codex CLI",
+      "kind": "cli",
+      "command": "codex",
+      "args": ["exec", "--skip-git-repo-check", "{{prompt}}"],
+      "capabilities": "code,refactor,test",
+      "cost_per_1k": 0,
+      "max_concurrency": 1,
+      "enabled": 1
+    },
+    {
+      "id": "dsh",
+      "name": "DeepSeek Harness",
+      "kind": "manual",
+      "command": null,
+      "args": null,
+      "capabilities": "plan,review,research,doc",
+      "cost_per_1k": 0,
+      "max_concurrency": 2,
+      "enabled": 1
+    }
+  ]
+}

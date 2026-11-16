@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Foreman · Agent 控制台</title>
+    <link rel="stylesheet" href="./style.css" />
+    <link rel="icon" href="data:," />
+  </head>
+  <body>
+    <header class="top">
+      <div class="brand">
+        <span class="mark">F</span>
+        <div class="brand-text">
+          <strong>Foreman</strong>
+          <span>看住你的 agent，而不是猜它在干什么</span>
+        </div>
+      </div>
+      <div class="top-right">
+        <span class="live" id="live"><i></i>实时</span>
+        <span class="clock" id="clock">--:--:--</span>
+      </div>
+    </header>
+
+    <main class="grid">
+      <aside class="col agents">
+        <h2>Agents</h2>
+        <div id="agentList" class="agent-list"></div>
+
+        <h2 class="mt">数据源</h2>
+        <div class="sources" id="sources"></div>
+      </aside>
+
+      <section class="col stream">
+        <div class="stream-top">
+          <div class="views" id="views">
+            <button class="view on" data-view="events">活动</button>
+            <button class="view" data-view="chat">对话</button>
+            <button class="view" data-view="orch">协作</button>
+          </div>
+          <div class="tabs" id="tabs">
+            <button class="tab on" data-agent="all">全部</button>
+            <button class="tab" data-agent="codex">Codex</button>
+            <button class="tab" data-agent="dsh">DSH</button>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="follow" checked />
+            <span>跟随最新</span>
+          </label>
+        </div>
+        <div class="events" id="events">
+          <div class="empty" id="empty">
+            <p>还没有活动</p>
+            <span>在 Codex 或 DSH 里发一句话，这里就会开始滚动。</span>
+          </div>
+        </div>
+
+        <div class="chat" id="chat" hidden>
+          <div class="chat-bar">
+            <select class="thread-pick" id="threadPick" title="切换对话"></select>
+            <button type="button" class="new-thread" id="newThread">＋ 新对话</button>
+          </div>
+          <div class="chat-list" id="chatList"></div>
+        </div>
+
+        <div class="orch" id="orch" hidden>
+          <div class="orch-list" id="orchList"></div>
+        </div>
+
+        <form class="composer" id="composer" autocomplete="off">
+          <div class="composer-row">
+            <div class="pick" id="pick">
+              <button type="button" class="pick-btn on" data-agent="dsh">DSH</button>
+              <button type="button" class="pick-btn" data-agent="codex">Codex</button>
+            </div>
+            <input id="task" name="task" placeholder="派个活：比如「读一遍 src/server.ts，指出三个可改的地方」" />
+            <button class="send" id="send" type="submit">派活</button>
+          </div>
+          <div class="composer-hint" id="hint">选中 DSH 后走 <code>dsh headless</code>，需要启动环境里有 DEEPSEEK_API_KEY。</div>
+        </form>
+      </section>
+
+      <aside class="col detail">
+        <h2>当前状态</h2>
+        <div id="statusCards" class="status-cards"></div>
+
+        <h2 class="mt">任务</h2>
+        <div id="runs" class="runs"></div>
+
+        <h2 class="mt">活动量</h2>
+        <div class="bars" id="bars"></div>
+
+        <h2 class="mt">说明</h2>
+        <p class="note">
+          v0.6：只读观察 + 手动派活 + 多轮对话 + 协作链路（拆解 / 交接 / 验收 / 返工一次）。
+          派活走 <code>dsh headless</code> 与 <code>codex exec</code>，输出会实时回到中间这条时间轴，
+          同时写进 <code>E:\foreman\logs</code>。
+        </p>
+      </aside>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

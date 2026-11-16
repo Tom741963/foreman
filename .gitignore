@@ -1,0 +1,29 @@
+# 依赖 / 产物
+node_modules/
+dist/
+*.log
+.server.log
+.server.err
+.tmp-*
+_*.md
+
+# 截图脚本的中间产物（docs/ 下只保留 README 用到的几张）
+docs/ui-*.png
+docs/parallel.png
+docs/think-rows.png
+docs/think-live.png
+docs/orch.png
+docs/orch-stop.png
+docs/orch-retry.png
+docs/orch-think.png
+docs/chat-new.png
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# 本机状态
+.env
+*.ndjson
