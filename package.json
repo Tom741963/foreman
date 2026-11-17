@@ -1,9 +1,19 @@
 {
   "name": "foreman",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.11.0",
   "type": "module",
-  "description": "多 Agent 值班台：让 Codex、DSH 等 AI 工具各司其职，人在旁边看着",
+  "description": "多 Agent 值班台：把 Codex 与 DeepSeek Harness 拉到同一条时间轴上，能看、能派活、能排队接力，跑完自动验收",
+  "keywords": [
+    "multi-agent",
+    "ai-agents",
+    "orchestration",
+    "observability",
+    "codex",
+    "deepseek",
+    "nodejs",
+    "typescript"
+  ],
   "scripts": {
     "start": "node src/server.ts",
     "serve": "node src/server.ts",

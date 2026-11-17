@@ -1,13 +1,14 @@
 # Foreman · 让多个 AI Agent 一起干活的值班台
 
-同时用 Codex 和 DeepSeek Harness 时，你会发现真正难的从来不是"它会不会写代码"，而是：
+同时用 Codex 和 DeepSeek Harness 时，真正难的从来不是"它会不会写代码"，而是：
 
 - 跑去倒杯水，回来发现它卡在等权限，而你完全不知道；
 - A 说"改好了"，B 不知道改了哪个文件、为什么这么改；
 - 两个 agent 同时动同一个仓库，冲突没人管；
 - 出了问题，没有一条时间线可以复盘。
 
-**Foreman 是一块值班台**：把两个 agent 的动作拉到同一条时间轴上，能看、能派活、能排队接力，还能在它们交活之后自动验收。
+**Foreman 是一块值班台**：把两个 agent 的动作拉到同一条时间轴上，能看、能派活、能排队接力，
+还能在它们交活之后自动验收——改了什么、花了多少、对不对，一眼能看到。
 
 不是再造一个 agent，而是让一堆 agent 不打架。
 
@@ -15,15 +16,24 @@
 
 **活动流**：两个 agent 的动作按真实时间并排，思考单独上色。
 
-![活动流](docs/screenshot.png)
+![活动流](docs/ui-events.png)
 
-**对话**：同一个对话里可以交替问 Codex 和 DSH，各有各的上下文，思考过程可展开。
+**对话**：同一个对话里交替问 Codex 和 DSH，各有各的上下文，思考过程可展开。
 
-![对话](docs/chat.png)
+![对话](docs/ui-chat.png)
 
-**协作**：一句任务拆成多步，两个 agent 接力，最后自动验收；不过就带着问题返工一次。
+**协作**：一句任务拆成多步，两个 agent 接力，跑完自动验收。
 
-![协作](docs/orch-verify.png)
+![协作](docs/orch-verifying.png)
+
+**产物与成本**：这条链改了哪些文件（带 diff）、花了多少 token，都在同一屏。
+
+![产物](docs/orch-artifacts.png)
+![成本](docs/orch-cost.png)
+
+**排队**：同一个 agent 忙着时，后来的任务排队等，不会直接失败。
+
+![排队](docs/orch-queue.png)
 
 ## 现在能做什么
 
@@ -33,8 +43,11 @@
 | 手动派活 | 选 agent、写一句话，起 `dsh headless` / `codex exec` 子进程 |
 | 多轮对话 | 每条消息带 `sessionId` / `thread_id` 续会话，不是靠复述历史 |
 | 协作链路 | 一个任务自动拆成 2–3 步，DSH 出方案、Codex 落文件，逐步交接 |
-| 验收 + 返工 | 全部跑完后由 dsh 对照原始任务检查，不过就把问题写回步骤 prompt 重跑一次 |
+| 产物面板 | 每一步改过哪些文件、加删几行、具体 diff |
+| 成本统计 | 输入 / 输出 / 缓存命中 token 与耗时，按 step 与整链汇总 |
+| 验收 + 返工 | 全部跑完后对照原始任务检查，不过就把问题写回 prompt 重跑一次 |
 | 随时接管 | 运行中可「停」，失败/停止的步骤可「重跑这一步」，单步 150 秒硬超时 |
+| 排队 | 同一 agent 串行、不同 agent 并行，排队位置可见 |
 | 全程落盘 | 事件按天写 JSONL，线程与任务链存 JSON，可回放、可统计 |
 
 ## 快速开始
@@ -48,7 +61,7 @@ node src/server.ts
 
 打开浏览器即可。页面上能看的东西不需要任何配置；**要派活**才需要两样东西：
 
-1. **DSH**：`~/.foreman/env.json` 里放 key（这个文件不会进仓库、不进日志）
+1. **DSH**：`~/.foreman/env.json` 里放 key（这个文件不进仓库、不进日志）
 
    ```json
    { "DEEPSEEK_API_KEY": "sk-..." }
@@ -58,7 +71,7 @@ node src/server.ts
    （`%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe`，读的是同一份 `~/.codex/config.toml`）。
    也可以用环境变量 `FOREMAN_CODEX_EXE` 指定。
 
-工作目录默认 `D:\foreman`，可用 `FOREMAN_CWD` 改。
+工作目录默认 `D:\foreman`，可用 `FOREMAN_CWD` 改。日志默认写 `E:\foreman\logs`，可用 `FOREMAN_LOGS` 改。
 
 ## 架构
 
@@ -67,16 +80,17 @@ node src/server.ts
    ▲ SSE：init / events / runs / chat-delta / chat-think / orch
    │
 src/server.ts ── adapters/codex.ts   （node:sqlite 只读）
-   │         ├── adapters/dsh.ts     （扫 zstd 帧，逐帧解压）
-   │         ├── runner.ts           （spawn + 事件归一 + 150s 超时）
-   │         ├── orchestrator.ts     （拆解 / 校验 / 任务链存档）
+   │         ├── adapters/dsh.ts     （扫 zstd 帧，逐帧解压，含 token 用量）
+   │         ├── runner.ts           （spawn + 事件归一 + 150s 超时 + 按 agent 排队）
+   │         ├── orchestrator.ts     （拆解 / 验收 / 任务链存档）
+   │         ├── artifacts.ts        （工作目录快照 + 行级 diff）
    │         ├── threads.ts          （多轮对话 + 会话 id）
    │         └── logs.ts             （按天追加 JSONL）
    ▼
 E:\foreman\logs  （events-*.jsonl / threads/ / orchestrations/）
 ```
 
-两边记录格式完全不同（一个是 SQLite，一个是逐帧 zstd 追加），适配器把它们归一成同一种事件：
+两边的记录格式完全不同（一个是 SQLite，一个是逐帧 zstd 追加），适配器把它们归一成同一种事件：
 
 ```ts
 type AgentEvent = { agent: "codex" | "dsh"; ts: number; kind: string; text: string };
@@ -84,7 +98,7 @@ type AgentEvent = { agent: "codex" | "dsh"; ts: number; kind: string; text: stri
 
 于是时间轴能按真实时间把两边并排，而不是各看各的窗口。
 
-## 三个刻意的取舍
+## 几个刻意的取舍
 
 **1. 只读优先，能不碰就不碰。**
 观察走的是 agent 自己的落盘记录；派活走官方命令行（`dsh headless --json`、`codex exec --json`），
@@ -97,9 +111,16 @@ type AgentEvent = { agent: "codex" | "dsh"; ts: number; kind: string; text: stri
 **3. 自动返工只做一次。**
 验收失败就带着问题重跑，但只重跑一次。否则两个模型会互相觉得对方没做对，无限踢皮球。
 
+**4. 监控工具不能被被监控对象拖死。**
+Codex 正在写库时我们读会被锁（`database is locked`）。所有读操作都包了 try/catch，
+读不到就当这一轮没有活动，下一轮再试——这是唯一一处不能"报错给用户看"的地方，
+因为报错的代价是整块屏黑掉。
+
 ## 已知限制
 
 - **Codex 没有思考过程**：`codex exec --json` 的 `reasoning` 条目通常不带正文，只能看到"在想"这个动作；
+- **产物只统计文本文件**：≤ 256 KB，跳过 `node_modules/.git/dist/logs`，二进制文件不显示；
+- **diff 是简化版**：掐公共前后缀、中间整段标红绿，不是 git 那种最小编辑；
 - **单机、无鉴权**：只监听 `127.0.0.1`，没有登录，别直接暴露到公网；
 - **Windows 优先**：路径、进程启动、Edge 截图脚本都按 Windows 写的，其他平台需要改；
 - **验收依赖模型判断**：它不是编译器，能挡住"文件没写""正文里混了过程说明"，拦不住细微逻辑错误。
@@ -108,104 +129,39 @@ type AgentEvent = { agent: "codex" | "dsh"; ts: number; kind: string; text: stri
 
 ```
 src/
-  server.ts         HTTP + SSE + 路由 + 任务编排
+  server.ts         HTTP + SSE + 路由 + 任务编排 + 按 agent 排队
   runner.ts         起进程、解析事件、超时
-  orchestrator.ts   拆解 / 校验解析 / 任务链
+  orchestrator.ts   拆解 / 验收解析 / 任务链
+  artifacts.ts      工作目录快照与行级 diff
   threads.ts        对话与上下文
   logs.ts           落盘
   adapters/         codex.ts · dsh.ts · text.ts
   web/              index.html · style.css · app.js
-scripts/            probe.ts · shot.mjs · check-*.mjs
+scripts/            probe.ts · shot*.mjs · check-*.mjs
 ```
+
+## 版本记录
+
+- **v0.11** 多链排队：同一 agent 串行、不同 agent 并行
+- **v0.10** 成本统计（token + 耗时），修 Codex 库锁崩服务
+- **v0.9** 产物面板：任务链改过哪些文件、带 diff
+- **v0.8** 「验收中」状态、任务链历史下拉、重启时清理残留状态
+- **v0.7** 思考过程实时流（DSH 有、Codex 无）
+- **v0.6** 自动验收 + 失败返工一次
+- **v0.5** Codex 通道（复用桌面版自带 CLI，无需订阅）
+- **v0.4** 多轮对话（sessionId 续会话）
+- **v0.3** 三栏界面 + 活动流
+- **v0.2** 派活（`dsh headless` / `codex exec`）
+- **v0.1** 只读观察两路 agent
 
 ## Roadmap
 
-- [ ] 产物面板：步骤产出散在卡片里，改成文件树 + diff
-- [ ] 任务历史：`/api/orchs` 有数据，界面还没有入口
-- [ ] 状态细化：步骤跑完到验收之间应显示「验收中」，而不是先「完成」
-- [ ] 被手动停止的 run 在任务面板里应显示「已停止」而不是「失败」
+- [ ] Codex 命令时间线：把 `command_execution` 单独抽成一条"它在跑什么"的轨道
+- [ ] 产物面板支持二进制与超大文件（只报路径与大小）
+- [ ] 被手动停止的 run 在右侧任务卡里显示「已停止」而不是「失败」
+- [ ] 任务链的重跑历史：同一链返工多次时，保留每一轮的产出
+- [ ] 插件式 adapter：新 agent 只要实现 `recentEvents` 就能接进来
 
 ## License
 
 MIT
-
-## 验收中状态与任务历史（v0.8）
-
-- 步骤跑完后链会先进「验收中」（紫色脉冲徽章），验收跑完才落到「已完成 / 失败」，
-  不再是以前那种「先显示已完成、十几秒后才冒出验收结论」。
-- 验收期间也能点「停」：会把验收进程一起杀掉，链标记「已停止」，不会触发自动返工。
-- 协作视图顶部多了任务链下拉：列出最近 12 条（标题 · 状态 · 步数），可以回看任意一条；
-  点「最新」回到最新那条并继续跟随新任务。
-- 服务重启时，上次遗留的「拆解中 / 执行中 / 验收中」会被标成「已停止 · 服务重启，已中断」——
-  进程已经没了，就不装作还在跑。
-
-验证脚本：
-
-```
-node scripts/shot-verify.mjs        # 等「验收中」徽章出现再截图
-node scripts/check-history.mjs      # 断言下拉条数、切换、回到最新
-```
-
-## 产物面板（v0.9）
-
-任务链跑完，"它到底改了哪些文件"以前只能靠读每步的散文产出猜。现在直接在链下面列出来：
-
-- 每个被改动的文件一行：路径、新增/修改/删除、`+新增行 −删除行`；
-- 点开看行级 diff（`--- /dev/null` 开头就表示这是新文件）；
-- 每跑完一步就刷新，不用等整条链结束；
-- 自动返工时接上一轮的结果合并，不会把先前的改动冲掉。
-
-实现是 `src/artifacts.ts`：开跑前对工作目录拍一张文本快照，跑完对比，
-只统计工作目录内的文本文件（≤256 KB，跳过 `node_modules` / `.git` / `dist` / `logs`）。
-diff 是"掐掉公共前后缀、中间整段标红绿"的简化版，不是 git 那种最小编辑距离——
-够看清改了什么，但别拿它当 patch 用。
-
-自测：
-
-```
-node scripts/check-artifacts.mjs --run    # 真跑一条链，断言路径/类型/行数/diff 头
-node scripts/shot-artifacts.mjs           # 展开第一个 diff 并截图
-```
-
-## 成本统计（v0.10）
-
-每条任务链下面多了一行「成本」，每个步骤右上角也多了一个 token 数：
-
-```
-成本   输入 43.5k   输出 1.5k   缓存命中 71.2k        合计 116.2k tok   40.9s
-```
-
-两个 agent 的用量来源不一样，这也是这块最费劲的地方：
-
-- **Codex**：`codex exec --json` 的 `turn.completed` 事件里直接带
-  `usage.input_tokens / output_tokens / cached_input_tokens`，照抄即可。
-- **DSH**：`headless --json` 的 stdout **没有** 用量。只能跑完回到会话日志
-  （`~/.dsh/sessions/**/session.v4.jsonl.zstd`）里，把 `assistant/message` 事件的
-  `data.usage` 加总。两个坑：一是日志里 usage 挂在 `data` 下面而不是事件顶层；
-  二是子进程刚退出时日志还没写完，要轮询几次才能读到，所以 `usageForSessionWithRetry`
-  最多试 6 次、每次间隔 250ms。
-- 同一会话续聊时日志会累计，所以按会话记一个基线，只取「这一轮」的增量。
-- 验收那次调用也算进成本（它也花 token）。
-
-顺带修了一个真 bug：Codex 正在写它的 sqlite 时我们读会被锁，`database is locked`
-直接把服务带崩了。现在适配器里 `open` / 查询都包了 try/catch，读不到就当这轮没有活动，
-下一轮再试——**监控工具不能被被监控对象拖死**。
-
-## 多链排队（v0.11）
-
-同一个 agent 同时只能跑一个任务——以前第二条链一拍上去就会因为“agent 忙”直接失败。
-现在改成排队：
-
-- 排队中的步骤显示「排队中 · 前面 3 个」，轮到自己自动开始，不用手动重提；
-- 两条链用**不同**的 agent 时仍然并行（锁是按 agent 分的，不是全局锁）；
-- 排队不影响超时：150 秒是从真正开始跑算起，不是从提交算起。
-
-实现是 `server.ts` 里的 `withAgentLock`：给每个 agent 维护一条 promise 链，
-后来的请求 `await` 前一个的 release，同时用 `agentWaiting` 记账算出“前面还有几个”。
-
-自测：
-
-```
-node scripts/check-queue.mjs     # 同时提交两条链，断言看到排队、两条都 done、都有 token 统计
-node scripts/shot-queue.mjs      # 在排队的那一刻截图
-```
