@@ -312,6 +312,9 @@ const stopFlag = new Set<string>();
 
 /** 跑完链之后验收：不过就带着问题自动返工一次 */
 async function verifyOrch(o: Orchestration): Promise<void> {
+  o.state = "verifying";
+  pushOrch(o);
+
   // 演练开关：只让第一次验收失败，用来验证返工分支（不调用模型，省钱省时）
   const stub = process.env.FOREMAN_VERIFY_STUB;
   if (stub === "fail-once" && !o.retried) {
@@ -326,11 +329,21 @@ async function verifyOrch(o: Orchestration): Promise<void> {
       onStart: (id) => liveStep.set(o.id, id),
     });
     liveStep.delete(o.id);
+    if (stopFlag.has(o.id)) {
+      o.state = "stopped";
+      o.note = "已手动停止";
+      pushOrch(o);
+      return;
+    }
     o.verify = parseVerification(r.text);
   }
   pushOrch(o);
 
-  if (o.verify.pass || o.retried || !o.verify.issues.length) return;
+  if (o.verify.pass || o.retried || !o.verify.issues.length) {
+    o.state = "done";
+    pushOrch(o);
+    return;
+  }
 
   o.retried = true;
   const first = o.verify.issues[0].step;
@@ -600,7 +613,9 @@ const server = http.createServer((req, res) => {
       .then((body) => {
         const o = getOrch(body.id ?? "");
         if (!o) throw new Error("没有这个任务链");
-        if (o.state !== "running" && o.state !== "planning") throw new Error("这条任务链没在跑");
+        if (o.state !== "running" && o.state !== "planning" && o.state !== "verifying") {
+          throw new Error("这条任务链没在跑");
+        }
         stopFlag.add(o.id);
         const runId = liveStep.get(o.id);
         if (runId) stopRun(runId);
@@ -727,6 +742,15 @@ for (const e of collect()) {
 }
 
 setInterval(tick, POLL_MS).unref();
+
+// 上次退出时还在跑的任务链，重启后一律标成已停止（进程已经没了，不能装作还在跑）
+for (const o of listOrch()) {
+  if (o.state !== "planning" && o.state !== "running" && o.state !== "verifying") continue;
+  o.state = "stopped";
+  o.note = "服务重启，已中断";
+  for (const s of o.steps) if (s.state === "running") s.state = "stopped";
+  saveOrch(o);
+}
 
 server.listen(PORT, "127.0.0.1", () => {
   logServer("start", { port: PORT, codex: codexAvailable(), dsh: dshAvailable() });

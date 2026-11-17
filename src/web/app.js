@@ -14,6 +14,7 @@ const state = {
   threads: [],
   orch: null,
   orchs: [],
+  orchId: null,
   pending: "",
   pendingThink: "",
 };
@@ -319,6 +320,77 @@ $("threadPick").addEventListener("change", (ev) => {
 });
 $("newThread").addEventListener("click", startNewThread);
 
+const ORCH_STATE_TEXT = {
+  planning: "拆解中",
+  running: "执行中",
+  verifying: "验收中",
+  done: "已完成",
+  failed: "失败",
+  stopped: "已停止",
+};
+
+function renderOrchPick() {
+  const sel = $("orchPick");
+  if (!sel) return;
+  if (!state.orchs.length) {
+    sel.innerHTML = `<option value="">暂无任务链</option>`;
+    return;
+  }
+  sel.innerHTML = state.orchs
+    .map((o) => {
+      const t = o.task.length > 26 ? o.task.slice(0, 26) + "…" : o.task;
+      const st = ORCH_STATE_TEXT[o.state] ?? o.state;
+      const cur = (state.orchId ?? state.orchs[0].id) === o.id ? " selected" : "";
+      return `<option value="${o.id}"${cur}>${esc(t)}　·　${st}　·　${o.steps} 步</option>`;
+    })
+    .join("");
+}
+
+async function loadOrchs() {
+  try {
+    const list = await fetch("./api/orchs").then((r) => r.json());
+    if (Array.isArray(list)) {
+      state.orchs = list;
+      renderOrchPick();
+    }
+  } catch {
+    // 忽略
+  }
+}
+
+async function openOrch(id) {
+  state.orchId = id;
+  try {
+    const o = await fetch(`./api/orch?id=${encodeURIComponent(id)}`).then((r) => r.json());
+    state.orch = o;
+    renderOrch();
+    renderOrchPick();
+  } catch {
+    // 忽略
+  }
+}
+
+/** 回到最新那条（不锁定，后续新任务链会自动切过来） */
+async function showLatestOrch() {
+  state.orchId = null;
+  await loadOrchs();
+  const first = state.orchs[0];
+  if (!first) {
+    state.orch = null;
+    renderOrch();
+    return;
+  }
+  state.orch = await fetch(`./api/orch?id=${encodeURIComponent(first.id)}`).then((r) => r.json());
+  renderOrch();
+  renderOrchPick();
+}
+
+$("orchPick").addEventListener("change", (ev) => {
+  const id = ev.target.value;
+  if (id) openOrch(id);
+});
+$("orchNew").addEventListener("click", showLatestOrch);
+
 function renderOrch() {
   const el = $("orchList");
   const o = state.orch;
@@ -327,13 +399,7 @@ function renderOrch() {
     el.innerHTML = `<div class="empty"><p>还没有任务链</p><span>在下面写一件复杂一点的事，交给它拆成几步，两个 agent 接力完成。</span></div>`;
     return;
   }
-  const stateText = {
-    planning: "拆解中",
-    running: "执行中",
-    done: "已完成",
-    failed: "失败",
-    stopped: "已停止",
-  }[o.state] ?? o.state;
+  const stateText = ORCH_STATE_TEXT[o.state] ?? o.state;
   const stepState = {
     pending: "等待",
     running: "执行中",
@@ -366,7 +432,7 @@ function renderOrch() {
       </div>`;
     })
     .join("");
-  const running = o.state === "running" || o.state === "planning";
+  const running = o.state === "running" || o.state === "planning" || o.state === "verifying";
   const v = o.verify
     ? `<div class="verify ${o.verify.pass ? "ok" : "bad"}">
         <div class="verify-head">验收 · ${o.verify.pass ? "通过" : "未通过"}${
@@ -445,8 +511,10 @@ for (const btn of document.querySelectorAll(".view")) {
     if (!data.ok) throw new Error(data.error ?? "派活失败");
     $("task").value = "";
     if (orch) {
+      state.orchId = null;
       state.orch = data.orch;
       renderOrch();
+      await loadOrchs();
     } else if (chat) {
       const isNew = data.threadId && data.threadId !== state.threadId;
       state.threadId = data.threadId;
@@ -531,11 +599,7 @@ async function boot() {
   }
 
   try {
-    const orchs = await fetch("./api/orchs").then((r) => r.json());
-    if (Array.isArray(orchs) && orchs.length) {
-      state.orch = await fetch(`./api/orch?id=${encodeURIComponent(orchs[0].id)}`).then((r) => r.json());
-      renderOrch();
-    }
+    await showLatestOrch();
   } catch {
     // 没有任务链也能用
   }
@@ -569,8 +633,20 @@ async function boot() {
     }
     if (payload.type === "events") addEvents(payload.events);
     if (payload.type === "orch" && payload.orch) {
-      state.orch = payload.orch;
-      if (state.view === "orch") renderOrch();
+      const o = payload.orch;
+      if (state.orchId === null || state.orchId === o.id) {
+        state.orch = o;
+        if (state.view === "orch") renderOrch();
+      }
+      const hit = state.orchs.find((x) => x.id === o.id);
+      if (!hit) {
+        // 新任务链：插到最前
+        state.orchs.unshift({ id: o.id, task: o.task, state: o.state, createdAt: o.createdAt, steps: o.steps.length });
+        renderOrchPick();
+      } else if (hit.state !== o.state) {
+        hit.state = o.state;
+        renderOrchPick();
+      }
     }
     if (payload.type === "runs" && Array.isArray(payload.runs)) {
       state.runs = payload.runs;

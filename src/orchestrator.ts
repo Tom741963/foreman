@@ -40,7 +40,7 @@ export type Orchestration = {
   id: string;
   task: string;
   createdAt: number;
-  state: "planning" | "running" | "done" | "failed" | "stopped";
+  state: "planning" | "running" | "verifying" | "done" | "failed" | "stopped";
   steps: OrchStep[];
   note?: string;
   verify?: Verification;
