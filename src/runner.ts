@@ -30,6 +30,8 @@ export type RunEvent = {
   text: string;
 };
 
+export type RunUsage = { input: number; output: number; cached: number; total: number };
+
 export type Run = {
   id: string;
   agent: RunAgent;
@@ -41,6 +43,7 @@ export type Run = {
   exitCode: number | null;
   label?: string;
   sessionId?: string;
+  usage?: RunUsage;
   events: RunEvent[];
 };
 
@@ -226,6 +229,7 @@ export function startRun({ agent, prompt, label, sessionId, cwd, onEvent }: Star
       thread_id?: string;
       message?: string;
       item?: { type?: string; text?: string; command?: string };
+      usage?: { input_tokens?: number; output_tokens?: number; cached_input_tokens?: number };
       reason?: { kind?: string; error?: { message?: string } };
     };
     try {
@@ -271,6 +275,14 @@ export function startRun({ agent, prompt, label, sessionId, cwd, onEvent }: Star
       }
       case "turn.failed":
         push("run/final", `失败：${ev.message ?? "本轮失败"}`);
+        break;
+      case "turn.completed":
+        if (ev.usage) {
+          const input = ev.usage.input_tokens ?? 0;
+          const output = ev.usage.output_tokens ?? 0;
+          const cached = ev.usage.cached_input_tokens ?? 0;
+          run.usage = { input, output, cached, total: input + output + cached };
+        }
         break;
       case "error":
         push("run/err", ev.message ?? "未知错误");

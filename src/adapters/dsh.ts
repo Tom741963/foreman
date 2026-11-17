@@ -58,7 +58,88 @@ function readFrames(file: string): string {
       // 正在写入的最后一帧可能不完整，跳过即可
     }
   }
-  return parts.join("");
+  return parts.join("\n");
+}
+
+/** 会话文件所在目录（session-<id>） */
+function sessionDir(sessionId: string): string | null {
+  if (!dshAvailable()) return null;
+  const name = sessionId.startsWith("session-") ? sessionId : `session-${sessionId}`;
+  let hit: string | null = null;
+  const walk = (dir: string, depth: number) => {
+    if (hit || depth > 4) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      const full = path.join(dir, e.name);
+      if (e.name === name) {
+        hit = full;
+        return;
+      }
+      walk(full, depth + 1);
+    }
+  };
+  walk(ROOT, 0);
+  return hit;
+}
+
+const usageBaseline = new Map<string, number>();
+
+export type DshUsage = { input: number; output: number; cached: number; total: number };
+
+/**
+ * 一次 headless 跑完，从该会话的日志里把 usage 加总。
+ * 同一会话续聊会累计，所以记一个基线，返回「这一轮」的增量。
+ */
+export function usageForSession(sessionId: string): DshUsage | null {
+  const dir = sessionDir(sessionId);
+  if (!dir) return null;
+  const file = path.join(dir, "session.v4.jsonl.zstd");
+  if (!fs.existsSync(file)) return null;
+
+  let input = 0;
+  let output = 0;
+  let cached = 0;
+  for (const line of readFrames(file).split(/\r?\n/)) {
+    if (!line.includes('"usage"')) continue;
+    let rec: { data?: { usage?: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number } } };
+    try {
+      rec = JSON.parse(line) as typeof rec;
+    } catch {
+      continue;
+    }
+    // 日志里 usage 挂在 data 下面，不在事件顶层
+    const u = rec.data?.usage;
+    if (!u) continue;
+    input += u.inputTokens ?? 0;
+    output += u.outputTokens ?? 0;
+    cached += u.cacheReadTokens ?? 0;
+  }
+
+  const total = input + output + cached;
+  if (total === 0) return null; // 日志还没落盘，别把基线吃掉
+  const base = usageBaseline.get(sessionId) ?? 0;
+  usageBaseline.set(sessionId, total);
+  return { input, output, cached, total: Math.max(0, total - base) };
+}
+
+/** 子进程刚退出时日志可能还没写完，轮询一会儿再取 */
+export async function usageForSessionWithRetry(
+  sessionId: string,
+  tries = 6,
+  gapMs = 250,
+): Promise<DshUsage | null> {
+  for (let i = 0; i < tries; i++) {
+    const u = usageForSession(sessionId);
+    if (u) return u;
+    await new Promise((r) => setTimeout(r, gapMs));
+  }
+  return null;
 }
 
 export function listSessions(): DshSession[] {

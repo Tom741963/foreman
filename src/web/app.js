@@ -407,9 +407,11 @@ function renderOrch() {
     failed: "失败",
     stopped: "已停止",
   };
+  const fmt = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
   const steps = o.steps
     .map((s) => {
       const cost = s.startedAt && s.endedAt ? `${((s.endedAt - s.startedAt) / 1000).toFixed(1)}s` : "";
+      const tok = s.usage?.total ? ` · ${fmt(s.usage.total)} tok` : "";
       const out = s.output ? esc(s.output.slice(0, 1200)) : "…";
       const canRetry = s.state === "failed" || s.state === "stopped";
       return `<div class="step ${s.state}">
@@ -417,7 +419,7 @@ function renderOrch() {
           <span class="step-no">${s.i + 1}</span>
           <span class="who ${s.agent}">${s.agent === "codex" ? "Codex" : "DSH"}</span>
           <span class="step-title">${esc(s.title)}</span>
-          <span class="step-state">${stepState[s.state] ?? s.state}${cost ? " · " + cost : ""}</span>
+          <span class="step-state">${stepState[s.state] ?? s.state}${cost ? " · " + cost : ""}${tok}</span>
           ${canRetry ? `<button class="step-retry" data-retry="${s.i}">重跑这一步</button>` : ""}
         </div>
         <div class="step-prompt">${esc(s.prompt.slice(0, 200))}</div>
@@ -472,6 +474,18 @@ function renderOrch() {
         </div>`;
       })()
     : "";
+  const u = o.usage;
+  const costBlock =
+    u && (u.total || u.ms)
+      ? `<div class="cost">
+          <span class="cost-k">成本</span>
+          <span>输入 ${fmt(u.input)}</span>
+          <span>输出 ${fmt(u.output)}</span>
+          <span>缓存命中 ${fmt(u.cached)}</span>
+          <span class="cost-total">合计 ${fmt(u.total)} tok</span>
+          <span class="cost-ms">${(u.ms / 1000).toFixed(1)}s</span>
+        </div>`
+      : "";
   el.innerHTML = `
     <div class="orch-task">
       <div class="orch-head">
@@ -482,6 +496,7 @@ function renderOrch() {
       ${o.note ? `<div class="orch-note">${esc(o.note)}</div>` : ""}
       <div class="orch-steps">${steps}</div>
       ${arts}
+      ${costBlock}
       ${v}
     </div>`;
 }

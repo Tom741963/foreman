@@ -105,7 +105,13 @@ function summarize(itemType: string, raw: string): string {
 /** 最近的活动流，跨 thread 合并，按时间倒序 */
 export function recentEvents(limit = 40): AgentEvent[] {
   if (!codexAvailable()) return [];
-  const db = open();
+  let db;
+  try {
+    db = open();
+  } catch {
+    // Codex 正在写库时会被独占，这一轮先跳过，下一轮再试
+    return [];
+  }
   try {
     const rows = db
       .prepare(
@@ -121,8 +127,14 @@ export function recentEvents(limit = 40): AgentEvent[] {
       kind: r.item_type,
       text: summarize(r.item_type, r.item_json),
     }));
+  } catch {
+    return [];
   } finally {
-    db.close();
+    try {
+      db.close();
+    } catch {
+      // 忽略关闭失败
+    }
   }
 }
 

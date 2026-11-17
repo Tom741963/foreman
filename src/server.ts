@@ -13,7 +13,9 @@ import { dshAvailable, listSessions, recentEvents as dshEvents } from "./adapter
 import { LOG_ROOT, logEvents, logServer, logTask } from "./logs.ts";
 import type { AgentEvent } from "./adapters/codex.ts";
 import { diffSnapshots, snapshotFiles } from "./artifacts.ts";
+import { usageForSessionWithRetry } from "./adapters/dsh.ts";
 import { DEFAULT_WORK_DIR, envStatus, listRuns, pruneRuns, startRun, stopRun } from "./runner.ts";
+import type { RunUsage } from "./runner.ts";
 import type { Run, RunAgent, RunEvent } from "./runner.ts";
 import { appendMessage, buildPrompt, listThreads, newThread, readThread } from "./threads.ts";
 import type { Thread } from "./threads.ts";
@@ -59,8 +61,17 @@ function keyOf(e: AgentEvent): string {
 
 function collect(): AgentEvent[] {
   const out: AgentEvent[] = [];
-  if (codexAvailable()) out.push(...codexEvents(40));
-  if (dshAvailable()) out.push(...dshEvents(40));
+  // 读别人的数据库/日志随时可能失败（库被独占、文件写一半），一次失败不该带崩整个服务
+  try {
+    if (codexAvailable()) out.push(...codexEvents(40));
+  } catch {
+    // 下一轮再试
+  }
+  try {
+    if (dshAvailable()) out.push(...dshEvents(40));
+  } catch {
+    // 下一轮再试
+  }
   return out.sort((a, b) => a.ts - b.ts);
 }
 
@@ -265,17 +276,21 @@ function runToEnd(opts: {
   exitCode: number | null;
   runId: string;
   timedOut: boolean;
+  sessionId?: string;
+  usage?: RunUsage;
 }> {
   return new Promise((resolve) => {
     let text = "";
     let think = "";
+    let sessionId = "";
+    let usage: RunUsage | undefined;
     let finished = false;
     let runId = "";
     const finish = (code: number | null, timedOut: boolean) => {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
-      resolve({ text: text.trim(), thinking: think.trim(), exitCode: code, runId, timedOut });
+      resolve({ text: text.trim(), thinking: think.trim(), exitCode: code, runId, timedOut, sessionId, usage });
     };
     const timer = setTimeout(() => {
       if (runId) stopRun(runId);
@@ -292,8 +307,12 @@ function runToEnd(opts: {
         emitRunEvent(r, e);
         if (e.kind === "run/text") text += (text ? "\n" : "") + e.text;
         if (e.kind === "run/think") think += (think ? "\n\n" : "") + e.text;
+        if (e.kind === "run/session" && r.sessionId) sessionId = r.sessionId;
         if (e.kind === "run/err") text += `\n⚠ ${e.text}`;
-        if (e.kind === "run/exit") finish(r.exitCode, false);
+        if (e.kind === "run/exit") {
+          usage = r.usage;
+          finish(r.exitCode, false);
+        }
       },
     });
     runId = run.id;
@@ -304,6 +323,18 @@ function runToEnd(opts: {
 function pushOrch(o: Orchestration): void {
   saveOrch(o);
   broadcast({ type: "orch", orch: o });
+}
+
+/** 把一次运行的用量累加进任务链（没有 usage 也累加耗时） */
+function addUsage(o: Orchestration, usage: RunUsage | undefined, ms: number): void {
+  const base = o.usage ?? { input: 0, output: 0, cached: 0, total: 0, ms: 0 };
+  o.usage = {
+    input: base.input + (usage?.input ?? 0),
+    output: base.output + (usage?.output ?? 0),
+    cached: base.cached + (usage?.cached ?? 0),
+    total: base.total + (usage?.total ?? 0),
+    ms: base.ms + Math.max(0, ms),
+  };
 }
 
 /** 当前正在跑的步骤，停的时候要知道杀哪个进程 */
@@ -330,6 +361,10 @@ async function verifyOrch(o: Orchestration): Promise<void> {
       onStart: (id) => liveStep.set(o.id, id),
     });
     liveStep.delete(o.id);
+    if (!r.usage && r.sessionId) {
+      r.usage = (await usageForSessionWithRetry(r.sessionId)) ?? undefined;
+    }
+    addUsage(o, r.usage, 0);
     if (stopFlag.has(o.id)) {
       o.state = "stopped";
       o.note = "已手动停止";
@@ -414,11 +449,18 @@ async function runFrom(o: Orchestration, from: number): Promise<void> {
       });
       liveStep.delete(o.id);
 
+      // DSH 的 token 用量不在 stdout 里，跑完回读会话日志（刚退出时可能还没写完，轮询一下）
+      if (!r.usage && r.sessionId) {
+        r.usage = (await usageForSessionWithRetry(r.sessionId)) ?? undefined;
+      }
+
       step.runId = r.runId;
       step.exitCode = r.exitCode;
       step.output = r.text;
       step.thinking = r.thinking || undefined;
+      step.usage = r.usage ? { input: r.usage.input, output: r.usage.output, total: r.usage.total } : undefined;
       step.endedAt = Date.now();
+      addUsage(o, r.usage, step.endedAt - (step.startedAt ?? step.endedAt));
 
       if (stopFlag.has(o.id)) {
         step.state = "stopped";

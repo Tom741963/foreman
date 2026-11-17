@@ -18,6 +18,8 @@ export type OrchStep = {
   title: string;
   prompt: string;
   state: StepState;
+  /** 这一步的 token 用量（有就显示） */
+  usage?: { input: number; output: number; total: number };
   runId?: string;
   startedAt?: number;
   endedAt?: number;
@@ -29,6 +31,8 @@ export type OrchStep = {
 };
 
 export type VerifyIssue = { step: number; problem: string };
+
+export type OrchUsage = { input: number; output: number; cached: number; total: number; ms: number };
 
 export type Verification = {
   pass: boolean;
@@ -47,6 +51,8 @@ export type Orchestration = {
   verify?: Verification;
   /** 这条链动过的文件（相对工作目录） */
   artifacts?: ArtifactChange[];
+  /** 这条链的 token 用量与耗时 */
+  usage?: OrchUsage;
   /** 只自动返工一次 */
   retried?: boolean;
 };

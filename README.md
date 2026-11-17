@@ -166,3 +166,27 @@ diff 是"掐掉公共前后缀、中间整段标红绿"的简化版，不是 git
 node scripts/check-artifacts.mjs --run    # 真跑一条链，断言路径/类型/行数/diff 头
 node scripts/shot-artifacts.mjs           # 展开第一个 diff 并截图
 ```
+
+## 成本统计（v0.10）
+
+每条任务链下面多了一行「成本」，每个步骤右上角也多了一个 token 数：
+
+```
+成本   输入 43.5k   输出 1.5k   缓存命中 71.2k        合计 116.2k tok   40.9s
+```
+
+两个 agent 的用量来源不一样，这也是这块最费劲的地方：
+
+- **Codex**：`codex exec --json` 的 `turn.completed` 事件里直接带
+  `usage.input_tokens / output_tokens / cached_input_tokens`，照抄即可。
+- **DSH**：`headless --json` 的 stdout **没有** 用量。只能跑完回到会话日志
+  （`~/.dsh/sessions/**/session.v4.jsonl.zstd`）里，把 `assistant/message` 事件的
+  `data.usage` 加总。两个坑：一是日志里 usage 挂在 `data` 下面而不是事件顶层；
+  二是子进程刚退出时日志还没写完，要轮询几次才能读到，所以 `usageForSessionWithRetry`
+  最多试 6 次、每次间隔 250ms。
+- 同一会话续聊时日志会累计，所以按会话记一个基线，只取「这一轮」的增量。
+- 验收那次调用也算进成本（它也花 token）。
+
+顺带修了一个真 bug：Codex 正在写它的 sqlite 时我们读会被锁，`database is locked`
+直接把服务带崩了。现在适配器里 `open` / 查询都包了 try/catch，读不到就当这轮没有活动，
+下一轮再试——**监控工具不能被被监控对象拖死**。
