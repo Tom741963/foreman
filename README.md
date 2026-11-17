@@ -190,3 +190,22 @@ node scripts/shot-artifacts.mjs           # 展开第一个 diff 并截图
 顺带修了一个真 bug：Codex 正在写它的 sqlite 时我们读会被锁，`database is locked`
 直接把服务带崩了。现在适配器里 `open` / 查询都包了 try/catch，读不到就当这轮没有活动，
 下一轮再试——**监控工具不能被被监控对象拖死**。
+
+## 多链排队（v0.11）
+
+同一个 agent 同时只能跑一个任务——以前第二条链一拍上去就会因为“agent 忙”直接失败。
+现在改成排队：
+
+- 排队中的步骤显示「排队中 · 前面 3 个」，轮到自己自动开始，不用手动重提；
+- 两条链用**不同**的 agent 时仍然并行（锁是按 agent 分的，不是全局锁）；
+- 排队不影响超时：150 秒是从真正开始跑算起，不是从提交算起。
+
+实现是 `server.ts` 里的 `withAgentLock`：给每个 agent 维护一条 promise 链，
+后来的请求 `await` 前一个的 release，同时用 `agentWaiting` 记账算出“前面还有几个”。
+
+自测：
+
+```
+node scripts/check-queue.mjs     # 同时提交两条链，断言看到排队、两条都 done、都有 token 统计
+node scripts/shot-queue.mjs      # 在排队的那一刻截图
+```

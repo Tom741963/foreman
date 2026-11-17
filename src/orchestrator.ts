@@ -10,7 +10,7 @@ import { LOG_ROOT } from "./logs.ts";
 import type { ArtifactChange } from "./artifacts.ts";
 import type { RunAgent } from "./runner.ts";
 
-export type StepState = "pending" | "running" | "done" | "failed" | "stopped";
+export type StepState = "pending" | "queued" | "running" | "done" | "failed" | "stopped";
 
 export type OrchStep = {
   i: number;
@@ -18,6 +18,8 @@ export type OrchStep = {
   title: string;
   prompt: string;
   state: StepState;
+  /** 排队时前面还有几个任务 */
+  queuePos?: number;
   /** 这一步的 token 用量（有就显示） */
   usage?: { input: number; output: number; total: number };
   runId?: string;

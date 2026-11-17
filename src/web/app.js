@@ -402,6 +402,7 @@ function renderOrch() {
   const stateText = ORCH_STATE_TEXT[o.state] ?? o.state;
   const stepState = {
     pending: "等待",
+    queued: "排队中",
     running: "执行中",
     done: "完成",
     failed: "失败",
@@ -419,7 +420,9 @@ function renderOrch() {
           <span class="step-no">${s.i + 1}</span>
           <span class="who ${s.agent}">${s.agent === "codex" ? "Codex" : "DSH"}</span>
           <span class="step-title">${esc(s.title)}</span>
-          <span class="step-state">${stepState[s.state] ?? s.state}${cost ? " · " + cost : ""}${tok}</span>
+          <span class="step-state">${stepState[s.state] ?? s.state}${s.state === "queued" && s.queuePos ? ` · 前面 ${s.queuePos} 个` : ""}${
+            cost ? " · " + cost : ""
+          }${tok}</span>
           ${canRetry ? `<button class="step-retry" data-retry="${s.i}">重跑这一步</button>` : ""}
         </div>
         <div class="step-prompt">${esc(s.prompt.slice(0, 200))}</div>

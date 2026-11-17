@@ -262,15 +262,60 @@ type TaskBody = {
   i?: number;
 };
 
+/** 同一个 agent 同一时间只能跑一个任务；后来的排队等前面结束，而不是直接失败 */
+const agentLocks = new Map<string, Promise<void>>();
+const agentWaiting = new Map<string, number>();
+
+async function withAgentLock<T>(agent: string, onQueued: (pos: number) => void, fn: () => Promise<T>): Promise<T> {
+  const ahead = agentWaiting.get(agent) ?? 0;
+  agentWaiting.set(agent, ahead + 1);
+  const prev = agentLocks.get(agent) ?? Promise.resolve();
+  let release!: () => void;
+  const mine = new Promise<void>((r) => {
+    release = r;
+  });
+  agentLocks.set(
+    agent,
+    prev.then(() => mine),
+  );
+  if (ahead > 0) onQueued(ahead);
+  await prev.catch(() => {});
+  agentWaiting.set(agent, Math.max(0, (agentWaiting.get(agent) ?? 1) - 1));
+  try {
+    return await fn();
+  } finally {
+    release();
+  }
+}
+
 /** 跑一个任务并等它结束；超时就杀掉，避免 agent 自己绕进“再核对一遍”的死循环 */
-function runToEnd(opts: {
-  agent: RunAgent;
-  prompt: string;
-  label: string;
-  cwd?: string;
-  timeoutMs?: number;
-  onStart?: (runId: string) => void;
-}): Promise<{
+function runToEnd(
+  opts: {
+    agent: RunAgent;
+    prompt: string;
+    label: string;
+    cwd?: string;
+    timeoutMs?: number;
+    onStart?: (runId: string) => void;
+    onQueued?: (pos: number) => void;
+  },
+): Promise<{
+  text: string;
+  thinking: string;
+  exitCode: number | null;
+  runId: string;
+  timedOut: boolean;
+  sessionId?: string;
+  usage?: RunUsage;
+}> {
+  const { onStart, onQueued, ...call } = opts;
+  return withAgentLock(opts.agent, onQueued ?? (() => {}), () => startAndWait(call, onStart));
+}
+
+function startAndWait(
+  opts: { agent: RunAgent; prompt: string; label: string; cwd?: string; timeoutMs?: number },
+  onStart?: (runId: string) => void,
+): Promise<{
   text: string;
   thinking: string;
   exitCode: number | null;
@@ -316,7 +361,7 @@ function runToEnd(opts: {
       },
     });
     runId = run.id;
-    opts.onStart?.(run.id);
+    onStart?.(run.id);
   });
 }
 
@@ -429,7 +474,8 @@ async function runFrom(o: Orchestration, from: number): Promise<void> {
       }
 
       step.state = "running";
-      step.startedAt = Date.now();
+      step.startedAt = undefined;
+      step.queuePos = undefined;
       step.output = undefined;
       step.runId = undefined;
       step.endedAt = undefined;
@@ -445,7 +491,18 @@ async function runFrom(o: Orchestration, from: number): Promise<void> {
         agent: step.agent,
         prompt,
         label: `${step.title}`,
-        onStart: (id) => liveStep.set(o.id, id),
+        onQueued: (pos) => {
+          step.state = "queued";
+          step.queuePos = pos;
+          pushOrch(o);
+        },
+        onStart: (id) => {
+          step.state = "running";
+          step.startedAt = Date.now();
+          step.queuePos = undefined;
+          liveStep.set(o.id, id);
+          pushOrch(o);
+        },
       });
       liveStep.delete(o.id);
 
