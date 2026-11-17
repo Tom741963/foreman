@@ -12,6 +12,7 @@ import { codexAvailable, recentEvents as codexEvents, recentTurns } from "./adap
 import { dshAvailable, listSessions, recentEvents as dshEvents } from "./adapters/dsh.ts";
 import { LOG_ROOT, logEvents, logServer, logTask } from "./logs.ts";
 import type { AgentEvent } from "./adapters/codex.ts";
+import { diffSnapshots, snapshotFiles } from "./artifacts.ts";
 import { DEFAULT_WORK_DIR, envStatus, listRuns, pruneRuns, startRun, stopRun } from "./runner.ts";
 import type { Run, RunAgent, RunEvent } from "./runner.ts";
 import { appendMessage, buildPrompt, listThreads, newThread, readThread } from "./threads.ts";
@@ -361,6 +362,15 @@ async function verifyOrch(o: Orchestration): Promise<void> {
 
 /** 从第 from 步开始往后跑；每一步的产出接给下一步 */
 async function runFrom(o: Orchestration, from: number): Promise<void> {
+  // 开跑前拍一张工作目录的快照，跑完每一步再对比，算出这条链动了哪些文件
+  const before = snapshotFiles(DEFAULT_WORK_DIR);
+  const refreshArtifacts = () => {
+    // 返工重跑时接着上一轮的结果合并，不要丢掉先前的改动
+    const merged = new Map((o.artifacts ?? []).map((a) => [a.path, a] as const));
+    for (const c of diffSnapshots(before, snapshotFiles(DEFAULT_WORK_DIR))) merged.set(c.path, c);
+    o.artifacts = [...merged.values()];
+  };
+
   try {
     o.state = "running";
     o.note = undefined;
@@ -421,6 +431,7 @@ async function runFrom(o: Orchestration, from: number): Promise<void> {
       // 超时被杀也接受：已经写出的产出算这一步的结果
       step.state = r.exitCode === 0 || (r.timedOut && r.text) ? "done" : "failed";
       carry = `${carry}\n— ${step.title} —\n${r.text}`.slice(-3000);
+      refreshArtifacts();
       pushOrch(o);
 
       if (step.state === "failed") {

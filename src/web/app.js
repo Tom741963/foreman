@@ -448,6 +448,30 @@ function renderOrch() {
         }
       </div>`
     : "";
+  const badge = { added: "新增", modified: "修改", deleted: "删除" };
+  const arts = o.artifacts?.length
+    ? (() => {
+        const n = (c) => o.artifacts.filter((a) => a.change === c).length;
+        const sum = [n("added") && `新增 ${n("added")}`, n("modified") && `修改 ${n("modified")}`, n("deleted") && `删除 ${n("deleted")}`]
+          .filter(Boolean)
+          .join(" · ");
+        return `<div class="artifacts">
+          <div class="art-head">产物 · ${o.artifacts.length} 个文件<span class="art-sum">${sum}</span></div>
+          ${o.artifacts
+            .map(
+              (a) => `<details class="art">
+            <summary>
+              <span class="art-path">${esc(a.path)}</span>
+              <span class="art-badge ${a.change}">${badge[a.change] ?? a.change}</span>
+              <span class="art-stat">+${a.added} −${a.removed}</span>
+            </summary>
+            <pre class="art-diff">${esc(a.diff)}</pre>
+          </details>`,
+            )
+            .join("")}
+        </div>`;
+      })()
+    : "";
   el.innerHTML = `
     <div class="orch-task">
       <div class="orch-head">
@@ -457,6 +481,7 @@ function renderOrch() {
       </div>
       ${o.note ? `<div class="orch-note">${esc(o.note)}</div>` : ""}
       <div class="orch-steps">${steps}</div>
+      ${arts}
       ${v}
     </div>`;
 }

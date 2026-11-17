@@ -7,6 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { LOG_ROOT } from "./logs.ts";
+import type { ArtifactChange } from "./artifacts.ts";
 import type { RunAgent } from "./runner.ts";
 
 export type StepState = "pending" | "running" | "done" | "failed" | "stopped";
@@ -44,6 +45,8 @@ export type Orchestration = {
   steps: OrchStep[];
   note?: string;
   verify?: Verification;
+  /** 这条链动过的文件（相对工作目录） */
+  artifacts?: ArtifactChange[];
   /** 只自动返工一次 */
   retried?: boolean;
 };

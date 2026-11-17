@@ -1289,3 +1289,129 @@ h2.mt {
   font-size: 12px;
   line-height: 1.7;
 }
+
+/* ---------- 产物 ---------- */
+
+.artifacts {
+  margin-top: 4px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.015), transparent);
+  overflow: hidden;
+}
+
+.art-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 14px;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.3px;
+  color: var(--ink-2);
+  border-bottom: 1px solid var(--line);
+}
+
+.art-sum {
+  font-weight: 400;
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
+.art {
+  border-top: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.art:first-of-type {
+  border-top: none;
+}
+
+.art summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+.art summary::-webkit-details-marker {
+  display: none;
+}
+
+.art summary::before {
+  content: "▸";
+  color: var(--ink-3);
+  font-size: 10px;
+  transition: transform 0.15s ease;
+}
+
+.art[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.art summary:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.art-path {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.art-badge {
+  font-size: 10.5px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+.art-badge.added {
+  color: var(--ok);
+  border-color: #29513c;
+  background: rgba(111, 207, 151, 0.06);
+}
+
+.art-badge.modified {
+  color: var(--dsh);
+  border-color: #2c4a6e;
+  background: rgba(124, 179, 255, 0.06);
+}
+
+.art-badge.deleted {
+  color: var(--bad);
+  border-color: #6b3030;
+  background: rgba(239, 139, 139, 0.06);
+}
+
+.art-stat {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-3);
+  min-width: 66px;
+  text-align: right;
+}
+
+.art-diff {
+  margin: 0;
+  padding: 10px 14px 14px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: #b9c6d6;
+  overflow-x: auto;
+  max-height: 320px;
+  background: rgba(0, 0, 0, 0.22);
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  white-space: pre;
+}

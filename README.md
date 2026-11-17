@@ -145,3 +145,24 @@ MIT
 node scripts/shot-verify.mjs        # 等「验收中」徽章出现再截图
 node scripts/check-history.mjs      # 断言下拉条数、切换、回到最新
 ```
+
+## 产物面板（v0.9）
+
+任务链跑完，"它到底改了哪些文件"以前只能靠读每步的散文产出猜。现在直接在链下面列出来：
+
+- 每个被改动的文件一行：路径、新增/修改/删除、`+新增行 −删除行`；
+- 点开看行级 diff（`--- /dev/null` 开头就表示这是新文件）；
+- 每跑完一步就刷新，不用等整条链结束；
+- 自动返工时接上一轮的结果合并，不会把先前的改动冲掉。
+
+实现是 `src/artifacts.ts`：开跑前对工作目录拍一张文本快照，跑完对比，
+只统计工作目录内的文本文件（≤256 KB，跳过 `node_modules` / `.git` / `dist` / `logs`）。
+diff 是"掐掉公共前后缀、中间整段标红绿"的简化版，不是 git 那种最小编辑距离——
+够看清改了什么，但别拿它当 patch 用。
+
+自测：
+
+```
+node scripts/check-artifacts.mjs --run    # 真跑一条链，断言路径/类型/行数/diff 头
+node scripts/shot-artifacts.mjs           # 展开第一个 diff 并截图
+```
