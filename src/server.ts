@@ -235,11 +235,11 @@ function emitRunEvent(run: Run, e: RunEvent): void {
       });
       broadcast({ type: "thread", thread: t });
 
-      // 圆桌：对方被 @ 到了就让它接着说，最多自动传两轮
+      // 圆桌：对方被 @ 到了就让它接着说，最多自动传 N 轮（引号里的 @ 不算）
       if (t.mode === "room") {
         const other: RunAgent = run.agent === "codex" ? "dsh" : "codex";
         const hops = roomHops.get(t.id) ?? 0;
-        if (hops < ROOM_MAX_HOPS && new RegExp(`@${other}\\b`, "i").test(text)) {
+        if (hops < ROOM_MAX_HOPS && parseMentions(text).includes(other)) {
           roomHops.set(t.id, hops + 1);
           startRoomTurn(t, [other]);
         }
@@ -375,9 +375,10 @@ function startAndWait(
   });
 }
 
-/** 圆桌里已经自动接过几次话，防止两个模型互相客气个没完 */
+/** 圆桌里已经自动接过几次话，防止两个模型互相客气个没完。
+ *  默认两轮，可以用 FOREMAN_ROOM_HOPS 调（经费充足时可以让它们多聊几轮）。 */
 const roomHops = new Map<string, number>();
-const ROOM_MAX_HOPS = 2;
+const ROOM_MAX_HOPS = Math.max(0, Number(process.env.FOREMAN_ROOM_HOPS ?? 2));
 /** 群里单次发言的上限：relay 服务过载时会一直重试，不给上限就会永远挂着 */
 const ROOM_TIMEOUT_MS = Number(process.env.FOREMAN_ROOM_TIMEOUT ?? 120_000);
 
