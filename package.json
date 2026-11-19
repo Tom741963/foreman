@@ -1,7 +1,7 @@
 {
   "name": "foreman",
   "private": true,
-  "version": "0.11.0",
+  "version": "0.13.0",
   "type": "module",
   "description": "多 Agent 值班台：把 Codex 与 DeepSeek Harness 拉到同一条时间轴上，能看、能派活、能排队接力，跑完自动验收",
   "keywords": [

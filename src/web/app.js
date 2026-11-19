@@ -17,6 +17,8 @@ const state = {
   orchId: null,
   pending: "",
   pendingThink: "",
+  /** 待发送的附件（/api/attach 返回的元信息） */
+  attachments: [],
   /** 圆桌里这一轮允许自动接力几次 */
   roomHops: 2,
   /** 正在跑的每一路发言：runId -> {agent, text, think}。顺序圆桌里同时只有一路 */
@@ -591,16 +593,20 @@ for (const btn of document.querySelectorAll(".view")) {
           orch
             ? { task: prompt }
             : room
-              ? { threadId: state.threadId, prompt, hops: state.roomHops }
+              ? { threadId: state.threadId, prompt, hops: state.roomHops, attachments: state.attachments ?? [] }
               : chat
-                ? { threadId: state.threadId, prompt, agent: state.target }
-                : { agent: state.target, prompt },
+                ? { threadId: state.threadId, prompt, agent: state.target, attachments: state.attachments ?? [] }
+                : { agent: state.target, prompt, attachments: state.attachments ?? [] },
         ),
       },
     );
     const data = await res.json();
     if (!data.ok) throw new Error(data.error ?? "派活失败");
     $("task").value = "";
+    if (!orch) {
+      state.attachments = [];
+      renderAttachments();
+    }
     if (orch) {
       state.orchId = null;
       state.orch = data.orch;
@@ -690,6 +696,8 @@ async function boot() {
   renderDetail();
   renderRuns();
   syncPick();
+  attachEvents();
+  renderAttachments();
 
   try {
     await loadThreads();
@@ -783,3 +791,84 @@ boot().catch((err) => {
   $("live").innerHTML = "<i></i>连接失败";
   eventsEl.innerHTML = `<div class="empty"><p>连不上本地服务</p><span>${esc(err.message)}</span></div>`;
 });
+
+/* ---------------- 附件：拖进来、粘进来、点＋选 ---------------- */
+
+function renderAttachments() {
+  const bar = $("attachBar");
+  const list = state.attachments ?? [];
+  bar.hidden = list.length === 0;
+  bar.innerHTML = list
+    .map(
+      (a, i) => `
+      <span class="chip${a.note ? " bad" : ""}" title="${esc(a.note || a.rel)}">
+        ${a.kind === "image" ? "🖼" : a.kind === "video" ? "🎬" : "📄"} ${esc(a.name)}
+        <button type="button" data-drop="${i}" title="移除">×</button>
+      </span>`,
+    )
+    .join("");
+}
+
+function readAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1] ?? "");
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+async function uploadFile(file) {
+  state.attachments = state.attachments ?? [];
+  if (state.attachments.length >= 6) {
+    setHint("最多 6 个附件");
+    return;
+  }
+  try {
+    const data = await readAsBase64(file);
+    const res = await fetch("./api/attach", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ threadId: state.threadId, name: file.name, mime: file.type, data }),
+    });
+    const out = await res.json();
+    if (!out.ok) throw new Error(out.error ?? "上传失败");
+    state.attachments.push(out.attachment);
+    renderAttachments();
+    if (out.attachment.note) setHint(out.attachment.note);
+  } catch (err) {
+    setHint(`附件失败：${err.message}`);
+  }
+}
+
+function attachEvents() {
+  $("attachBtn").addEventListener("click", () => $("filePick").click());
+  $("filePick").addEventListener("change", async (ev) => {
+    for (const file of ev.target.files ?? []) await uploadFile(file);
+    ev.target.value = "";
+  });
+  $("attachBar").addEventListener("click", (ev) => {
+    const btn = ev.target.closest("[data-drop]");
+    if (!btn) return;
+    state.attachments.splice(Number(btn.dataset.drop), 1);
+    renderAttachments();
+  });
+  document.addEventListener("paste", (ev) => {
+    const items = [...(ev.clipboardData?.items ?? [])];
+    const files = items.filter((i) => i.kind === "file").map((i) => i.getAsFile()).filter(Boolean);
+    if (!files.length) return;
+    ev.preventDefault();
+    files.forEach((f) => uploadFile(f));
+  });
+  const composer = $("composer");
+  composer.addEventListener("dragover", (ev) => {
+    ev.preventDefault();
+    composer.classList.add("dropping");
+  });
+  composer.addEventListener("dragleave", () => composer.classList.remove("dropping"));
+  composer.addEventListener("drop", (ev) => {
+    ev.preventDefault();
+    composer.classList.remove("dropping");
+    [...(ev.dataTransfer?.files ?? [])].forEach((f) => uploadFile(f));
+  });
+}

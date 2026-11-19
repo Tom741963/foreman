@@ -134,10 +134,12 @@ type StartOptions = {
   label?: string;
   sessionId?: string;
   cwd?: string;
+  /** 图片附件（相对工作目录的路径）；只有 codex 能用原生图片输入 */
+  images?: string[];
   onEvent: (run: Run, e: RunEvent) => void;
 };
 
-export function startRun({ agent, prompt, label, sessionId, cwd, onEvent }: StartOptions): Run {
+export function startRun({ agent, prompt, label, sessionId, cwd, images, onEvent }: StartOptions): Run {
   const busy = runningFor(agent);
   if (busy) throw new Error(`${agent} 正在跑任务（${busy.id}），等它结束再来`);
 
@@ -188,7 +190,16 @@ export function startRun({ agent, prompt, label, sessionId, cwd, onEvent }: Star
       : {
           exe: CODEX_EXE,
           args: sessionId
-            ? ["exec", "resume", "--json", "--skip-git-repo-check", sessionId, prompt]
+            ? [
+                "exec",
+                "resume",
+                "--json",
+                "--skip-git-repo-check",
+                sessionId,
+                // 注意：--image 是可变参数，必须把提示词放在它前面，否则会被当成图片吞掉
+                prompt,
+                ...(images ?? []).flatMap((p) => ["--image", p]),
+              ]
             : [
                 "exec",
                 "--json",
@@ -196,6 +207,7 @@ export function startRun({ agent, prompt, label, sessionId, cwd, onEvent }: Star
                 "--sandbox",
                 "workspace-write",
                 prompt,
+                ...(images ?? []).flatMap((p) => ["--image", p]),
               ],
           env: { ...process.env, ...secret },
         };

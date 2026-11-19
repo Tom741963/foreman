@@ -17,6 +17,8 @@ import { usageForSessionWithRetry } from "./adapters/dsh.ts";
 import { DEFAULT_WORK_DIR, envStatus, listRuns, pruneRuns, startRun, stopRun } from "./runner.ts";
 import type { RunUsage } from "./runner.ts";
 import type { Run, RunAgent, RunEvent } from "./runner.ts";
+import { attachmentsBlock, prepareAttachment, saveAttachment } from "./attachments.ts";
+import type { Attachment } from "./attachments.ts";
 import { appendMessage, buildPrompt, buildRoomPrompt, listThreads, newThread, readThread, saveThread } from "./threads.ts";
 import type { Thread } from "./threads.ts";
 import {
@@ -270,6 +272,11 @@ type TaskBody = {
   id?: string;
   i?: number;
   hops?: number;
+  /** 附件（/api/attach 传 name+mime+data，其它接口传元信息） */
+  attachments?: unknown;
+  name?: string;
+  mime?: string;
+  data?: string;
 };
 
 /** 同一个 agent 同一时间只能跑一个任务；后来的排队等前面结束，而不是直接失败 */
@@ -725,12 +732,56 @@ const MIME: Record<string, string> = {
   ".ico": "image/x-icon",
 };
 
+/** 前端传回来的附件元信息 → 真正的附件（重新抽一遍文本，不信任浏览器给的内容） */
+async function prepareAttachments(raw: unknown): Promise<Attachment[]> {
+  if (!Array.isArray(raw)) return [];
+  const out: Attachment[] = [];
+  for (const item of raw.slice(0, 8)) {
+    if (!item || typeof item !== "object") continue;
+    const a = item as Partial<Attachment>;
+    if (typeof a.rel !== "string") continue;
+    // 只认工作目录里 attachments/ 下面的文件，防止路径穿越
+    const rel = a.rel.replace(/\\/g, "/");
+    if (!rel.startsWith("attachments/") || rel.includes("..")) continue;
+    out.push(
+      await prepareAttachment({
+        id: typeof a.id === "string" ? a.id : "0",
+        name: typeof a.name === "string" ? a.name : "file",
+        rel,
+        kind: (a.kind ?? "other") as Attachment["kind"],
+        mime: typeof a.mime === "string" ? a.mime : "",
+        size: typeof a.size === "number" ? a.size : 0,
+      }),
+    );
+  }
+  return out;
+}
+
 const server = http.createServer((req, res) => {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
 
+  if (req.method === "POST" && url.pathname === "/api/attach") {
+    readJson(req, 24 * 1024 * 1024)
+      .then(async (body) => {
+        const name = typeof body.name === "string" ? body.name : "file";
+        const data = typeof body.data === "string" ? body.data : "";
+        if (!data) throw new Error("空文件");
+        const threadKey = typeof body.threadId === "string" && body.threadId ? body.threadId : "local";
+        const saved = saveAttachment({ threadKey, name, mime: body.mime, base64: data });
+        const ready = await prepareAttachment(saved);
+        res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: true, attachment: ready }));
+      })
+      .catch((err: Error) => {
+        res.writeHead(400, { "content-type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: false, error: err.message }));
+      });
+    return;
+  }
+
   if (req.method === "POST" && url.pathname === "/api/chat") {
     readJson(req)
-      .then((body) => {
+      .then(async (body) => {
         const text = (body.prompt ?? "").trim();
         const agent = body.agent === "codex" ? "codex" : "dsh";
         const threadId = typeof body.threadId === "string" ? body.threadId : "";
@@ -740,7 +791,10 @@ const server = http.createServer((req, res) => {
         const t = existing ?? newThread(text);
         // 有会话 id 就直接续会话（真多轮）；没有才用“复述历史”兜底
         const sid = t.sessions?.[agent];
-        const prompt = sid ? text : buildPrompt(t, text, DEFAULT_WORK_DIR);
+        const files = await prepareAttachments(body.attachments);
+        const block = attachmentsBlock(files);
+        const base = sid ? text : buildPrompt(t, text, DEFAULT_WORK_DIR);
+        const prompt = block ? `${base}\n\n${block}` : base;
         appendMessage(t, { role: "user", text, at: Date.now() });
 
         const run = startRun({
@@ -748,6 +802,7 @@ const server = http.createServer((req, res) => {
           prompt,
           label: text,
           sessionId: sid,
+          images: files.filter((f) => f.kind === "image").map((f) => f.rel),
           onEvent: emitRunEvent,
         });
         runThread.set(run.id, t.id);
@@ -765,7 +820,7 @@ const server = http.createServer((req, res) => {
 
   if (req.method === "POST" && url.pathname === "/api/room") {
     readJson(req)
-      .then((body) => {
+      .then(async (body) => {
         const text = (body.prompt ?? "").trim();
         const threadId = typeof body.threadId === "string" ? body.threadId : "";
         if (!text) throw new Error("说点什么再发");
@@ -783,6 +838,13 @@ const server = http.createServer((req, res) => {
 
         const mentions = parseMentions(text);
         const targets: RunAgent[] = mentions.length ? mentions : ["codex", "dsh"];
+        const files = await prepareAttachments(body.attachments);
+        const block = attachmentsBlock(files);
+        if (block) {
+          const last = t.messages[t.messages.length - 1];
+          last.text = `${last.text}\n\n${block}`;
+          saveThread(t);
+        }
         startRoomTurn(t, targets, asked);
         broadcast({ type: "thread", thread: t });
 

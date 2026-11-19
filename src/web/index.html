@@ -80,7 +80,9 @@
         </div>
 
         <form class="composer" id="composer" autocomplete="off">
+          <div class="attach-bar" id="attachBar" hidden></div>
           <div class="composer-row">
+            <button type="button" class="attach-btn" id="attachBtn" title="添加图片或文件（也可以直接拖进来 / Ctrl+V 粘贴截图）">＋</button>
             <div class="pick" id="pick">
               <button type="button" class="pick-btn on" data-agent="dsh">DSH</button>
               <button type="button" class="pick-btn" data-agent="codex">Codex</button>
@@ -88,6 +90,7 @@
             <input id="task" name="task" placeholder="派个活：比如「读一遍 src/server.ts，指出三个可改的地方」" />
             <button class="send" id="send" type="submit">派活</button>
           </div>
+          <input type="file" id="filePick" multiple hidden />
           <div class="composer-hint" id="hint">选中 DSH 后走 <code>dsh headless</code>，需要启动环境里有 DEEPSEEK_API_KEY。</div>
         </form>
       </section>
@@ -104,8 +107,7 @@
 
         <h2 class="mt">说明</h2>
         <p class="note">
-          v0.11：观察 + 派活 + 多轮对话 + 协作链路（拆解 / 交接 / 产物 / 成本 / 验收 / 返工一次），
-          同一 agent 串行排队、不同 agent 并行。派活走 <code>dsh headless</code> 与 <code>codex exec</code>，
+          v0.13：观察 + 派活 + 多轮对话 + 圆桌（顺序发言、轮数可调）+ 协作链路（拆解 / 交接 / 产物 / 成本 / 验收 / 返工一次）+ 附件（图片、PDF、Word）。派活走 dsh headless 与 codex exec，输出实时回到中间时间轴，同时写进 E:\foreman\logs。<code>dsh headless</code> 与 <code>codex exec</code>，
           输出实时回到中间时间轴，同时写进 <code>E:\foreman\logs</code>。
         </p>
       </aside>
