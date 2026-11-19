@@ -17,7 +17,9 @@ const state = {
   orchId: null,
   pending: "",
   pendingThink: "",
-  /** 正在跑的每一路发言：runId -> {agent, text, think}。圆桌里会有多个同时存在 */
+  /** 圆桌里这一轮允许自动接力几次 */
+  roomHops: 2,
+  /** 正在跑的每一路发言：runId -> {agent, text, think}。顺序圆桌里同时只有一路 */
   pendingRuns: new Map(),
 };
 
@@ -198,9 +200,14 @@ function syncPick() {
     b.classList.toggle("on", b.dataset.agent === state.target);
   }
   $("hint").classList.remove("bad");
+  $("hopPick").hidden = !state.room;
   if (state.room) {
+    $("hopPick").value = String(state.roomHops);
+    const hops = state.roomHops;
     $("hint").innerHTML =
-      '群聊：<code>@codex</code> / <code>@dsh</code> 指定谁回，不 @ 就两人同时回；谁被对方 @ 到会自动接话（最多两轮）。';
+      hops > 0
+        ? `群聊：按顺序发言，一人说完另一个再说。<code>@codex</code> / <code>@dsh</code> 指定谁先开口，不 @ 就 Codex 先说；被对方点名会自动接，最多 ${hops} 轮。`
+        : '群聊：按顺序发言。<code>@codex</code> / <code>@dsh</code> 指定谁开口，不 @ 就 Codex 先说；这一轮不自动接力，说完就停，等你总结。';
     return;
   }
   if (state.target === "dsh") {
@@ -310,12 +317,13 @@ async function openThread(id) {
     state.threadId = t.id;
     state.thread = t;
     state.room = t.mode === "room";
+    state.roomHops = typeof t.maxHops === "number" ? t.maxHops : 2;
     state.pending = "";
     state.pendingThink = "";
     state.pendingRuns.clear();
     $("task").placeholder =
       state.room
-        ? "跟群里说点什么；@codex 或 @dsh 指定谁回，不 @ 就两人同时回"
+        ? "跟群里说点什么；@codex 或 @dsh 指定谁先开口"
         : "派个活：比如「读一遍 src/server.ts，指出三个可改的地方」";
     renderChat();
     renderThreadPick();
@@ -329,11 +337,12 @@ function startNewThread(room = false) {
   state.threadId = null;
   state.thread = { id: null, title: "", messages: [], mode: room ? "room" : "dm" };
   state.room = room;
+  if (room) state.roomHops = 2;
   state.pending = "";
   state.pendingThink = "";
   state.pendingRuns.clear();
   $("task").placeholder = room
-    ? "跟群里说点什么；@codex 或 @dsh 指定谁回，不 @ 就两人同时回"
+    ? "跟群里说点什么；@codex 或 @dsh 指定谁先开口"
     : "派个活：比如「读一遍 src/server.ts，指出三个可改的地方」";
   renderChat();
   renderThreadPick();
@@ -348,6 +357,10 @@ $("threadPick").addEventListener("change", (ev) => {
 });
 $("newThread").addEventListener("click", () => startNewThread(false));
 $("newRoom").addEventListener("click", () => startNewThread(true));
+$("hopPick").addEventListener("change", (ev) => {
+  state.roomHops = Number(ev.target.value);
+  syncPick();
+});
 
 const ORCH_STATE_TEXT = {
   planning: "拆解中",
@@ -578,7 +591,7 @@ for (const btn of document.querySelectorAll(".view")) {
           orch
             ? { task: prompt }
             : room
-              ? { threadId: state.threadId, prompt }
+              ? { threadId: state.threadId, prompt, hops: state.roomHops }
               : chat
                 ? { threadId: state.threadId, prompt, agent: state.target }
                 : { agent: state.target, prompt },

@@ -17,7 +17,7 @@ import { usageForSessionWithRetry } from "./adapters/dsh.ts";
 import { DEFAULT_WORK_DIR, envStatus, listRuns, pruneRuns, startRun, stopRun } from "./runner.ts";
 import type { RunUsage } from "./runner.ts";
 import type { Run, RunAgent, RunEvent } from "./runner.ts";
-import { appendMessage, buildPrompt, buildRoomPrompt, listThreads, newThread, readThread } from "./threads.ts";
+import { appendMessage, buildPrompt, buildRoomPrompt, listThreads, newThread, readThread, saveThread } from "./threads.ts";
 import type { Thread } from "./threads.ts";
 import {
   getOrch,
@@ -235,14 +235,13 @@ function emitRunEvent(run: Run, e: RunEvent): void {
       });
       broadcast({ type: "thread", thread: t });
 
-      // 圆桌：对方被 @ 到了就让它接着说，最多自动传 N 轮（引号里的 @ 不算）
-      if (t.mode === "room") {
-        const other: RunAgent = run.agent === "codex" ? "dsh" : "codex";
-        const hops = roomHops.get(t.id) ?? 0;
-        if (hops < ROOM_MAX_HOPS && parseMentions(text).includes(other)) {
-          roomHops.set(t.id, hops + 1);
-          startRoomTurn(t, [other]);
-        }
+      // 顺序圆桌：把这次发言交回排队器，轮到下一个人（或结束这一轮）
+      const waiter = roomWaiters.get(run.id);
+      if (waiter) {
+        roomWaiters.delete(run.id);
+        waiter(text);
+      } else {
+        roomDone.set(run.id, text);
       }
     }
     runText.delete(run.id);
@@ -270,6 +269,7 @@ type TaskBody = {
   task?: string;
   id?: string;
   i?: number;
+  hops?: number;
 };
 
 /** 同一个 agent 同一时间只能跑一个任务；后来的排队等前面结束，而不是直接失败 */
@@ -382,11 +382,38 @@ const ROOM_MAX_HOPS = Math.max(0, Number(process.env.FOREMAN_ROOM_HOPS ?? 2));
 /** 群里单次发言的上限：relay 服务过载时会一直重试，不给上限就会永远挂着 */
 const ROOM_TIMEOUT_MS = Number(process.env.FOREMAN_ROOM_TIMEOUT ?? 120_000);
 
-/** 让一组 agent 对着同一条聊天记录各说一句（并行，谁先想好谁先说） */
-function startRoomTurn(t: Thread, agents: RunAgent[]): Run[] {
-  const last = t.messages[t.messages.length - 1];
-  const label = last ? last.text.replace(/\s+/g, " ").slice(0, 60) : "圆桌发言";
-  return agents.map((agent) => {
+/** 每个人说完，等它的 run/exit 回来才轮到下一个（否则两个人同时打字就是菜市场） */
+const roomWaiters = new Map<string, (text: string) => void>();
+/** 万一 run/exit 比登记还早（子进程秒退），先把话存这儿，免得排队器干等 */
+const roomDone = new Map<string, string>();
+/** 同一个群里的发言排队执行，你连发三条也不会互相踩 */
+const roomQueue = new Map<string, Promise<void>>();
+
+function waitRunText(runId: string): Promise<string> {
+  const done = roomDone.get(runId);
+  if (done !== undefined) {
+    roomDone.delete(runId);
+    return Promise.resolve(done);
+  }
+  return new Promise((resolve) => {
+    roomWaiters.set(runId, resolve);
+    setTimeout(() => {
+      if (roomWaiters.has(runId)) {
+        roomWaiters.delete(runId);
+        resolve("");
+      }
+    }, ROOM_TIMEOUT_MS + 20_000).unref?.();
+  });
+}
+
+/** 一个接一个地说：后说的人拿到的聊天记录里，已经有前一个人刚说的话 */
+async function runRoomSequence(t: Thread, agents: RunAgent[], maxHops: number): Promise<void> {
+  const pending = [...agents];
+  let hops = 0;
+  while (pending.length) {
+    const agent = pending.shift() as RunAgent;
+    const last = t.messages[t.messages.length - 1];
+    const label = last ? last.text.replace(/\s+/g, " ").slice(0, 60) : "圆桌发言";
     const run = startRun({
       agent,
       prompt: buildRoomPrompt(t, agent as "dsh" | "codex", DEFAULT_WORK_DIR),
@@ -394,12 +421,34 @@ function startRoomTurn(t: Thread, agents: RunAgent[]): Run[] {
       onEvent: emitRunEvent,
     });
     runThread.set(run.id, t.id);
-    // 超时就掐掉，避免一条卡住的发言把整场对话拖死
-    setTimeout(() => {
+    const timer = setTimeout(() => {
       if (run.state === "running") stopRun(run.id);
-    }, ROOM_TIMEOUT_MS).unref?.();
-    return run;
-  });
+    }, ROOM_TIMEOUT_MS);
+    timer.unref?.();
+    const said = await waitRunText(run.id);
+    clearTimeout(timer);
+
+    // 它点名了对方，且轮数还有额度，就把它排到队尾（而不是立刻并行开跑）
+    const other: RunAgent = agent === "codex" ? "dsh" : "codex";
+    if (hops < maxHops && parseMentions(said).includes(other) && !pending.includes(other)) {
+      hops += 1;
+      pending.push(other);
+    }
+  }
+}
+
+/** 把一轮圆桌排进这个群的队尾 */
+function startRoomTurn(t: Thread, agents: RunAgent[], maxHops = ROOM_MAX_HOPS): void {
+  const prev = roomQueue.get(t.id) ?? Promise.resolve();
+  const next = prev
+    .then(() => runRoomSequence(t, agents, maxHops))
+    .catch((err: unknown) => {
+      console.error("[room] 这一轮失败了:", err);
+    })
+    .finally(() => {
+      if (roomQueue.get(t.id) === next) roomQueue.delete(t.id);
+    });
+  roomQueue.set(t.id, next);
 }
 
 /** 从一句话里找出被点名的人；没点名就是大家都说。
@@ -725,16 +774,20 @@ const server = http.createServer((req, res) => {
         const existing = threadId ? readThread(threadId) : null;
         const t = existing ?? newThread(text);
         t.mode = "room";
+        // 这一轮允许自动接力几次：请求里带了就按请求的，否则沿用这个群上次的设置
+        const asked = Number.isFinite(Number(body.hops)) ? Math.max(0, Math.min(10, Number(body.hops))) : t.maxHops ?? ROOM_MAX_HOPS;
+        t.maxHops = asked;
         appendMessage(t, { role: "user", text, at: Date.now() });
         roomHops.set(t.id, 0);
+        saveThread(t);
 
-        const asked = parseMentions(text);
-        const targets: RunAgent[] = asked.length ? asked : ["codex", "dsh"];
-        const runs = startRoomTurn(t, targets);
+        const mentions = parseMentions(text);
+        const targets: RunAgent[] = mentions.length ? mentions : ["codex", "dsh"];
+        startRoomTurn(t, targets, asked);
         broadcast({ type: "thread", thread: t });
 
         res.writeHead(202, { "content-type": "application/json; charset=utf-8" });
-        res.end(JSON.stringify({ ok: true, threadId: t.id, targets, runs: runs.map(toSummary) }));
+        res.end(JSON.stringify({ ok: true, threadId: t.id, targets, hops: asked }));
       })
       .catch((err: Error) => {
         res.writeHead(400, { "content-type": "application/json; charset=utf-8" });

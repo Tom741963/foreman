@@ -7,7 +7,7 @@
  *
  * 一律 spawn + 参数数组，不经过 shell，任务文本里的引号、中文、换行都不会被二次解释。
  */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -101,6 +101,8 @@ export function envStatus(): { file: string; keys: string[] } {
 
 const runs = new Map<string, Run>();
 const children = new Map<string, ChildProcess>();
+/** runId -> 往外推事件的那个函数（stopRun 被强杀后要补一条 run/exit） */
+const emitters = new Map<string, (kind: RunEvent["kind"], text: string) => void>();
 let seq = 0;
 
 export function listRuns(): Run[] {
@@ -166,6 +168,7 @@ export function startRun({ agent, prompt, label, sessionId, cwd, onEvent }: Star
     run.events.push(e);
     onEvent(run, e);
   };
+  emitters.set(id, push);
 
   const secret = localEnv();
   const spec =
@@ -343,19 +346,42 @@ export function startRun({ agent, prompt, label, sessionId, cwd, onEvent }: Star
     run.endedAt = Date.now();
     run.state = code === 0 ? "done" : "failed";
     children.delete(id);
+    emitters.delete(id);
     push("run/exit", `退出码 ${code ?? "?"}`);
   });
 
   return run;
 }
 
-export function stopRun(id: string): boolean {
+export function stopRun(id: string, reason = "手动停止"): boolean {
   const child = children.get(id);
   const run = runs.get(id);
   if (!child || !run) return false;
-  child.kill();
+
+  // Windows 上 child.kill() 常杀不干净（codex 还会留下子进程），用 taskkill /T 连子树一起收
+  try {
+    if (process.platform === "win32" && child.pid) {
+      spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+    } else {
+      child.kill();
+    }
+  } catch {
+    child.kill();
+  }
+
   run.state = "failed";
   run.endedAt = Date.now();
+
+  // 兜底：进程被强杀时 close 事件可能不来，排队器会一直等下去，3 秒后自己收尾
+  const timer = setTimeout(() => {
+    if (children.get(id) === child) {
+      children.delete(id);
+      run.exitCode = run.exitCode ?? null;
+      emitters.get(id)?.("run/exit", `已停止（${reason}）`);
+      emitters.delete(id);
+    }
+  }, 3000);
+  timer.unref?.();
   return true;
 }
 

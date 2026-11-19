@@ -28,6 +28,8 @@ export type Thread = {
   updatedAt: number;
   /** dm = 一对一；room = 三人圆桌（用户 + Codex + DSH 同一条时间线） */
   mode?: "dm" | "room";
+  /** 圆桌里允许自动接力几轮（0 = 说完就停，全靠用户点名） */
+  maxHops?: number;
   /** 各 agent 自己的会话 id；有它就能直接续会话，而不是复述历史 */
   sessions?: { dsh?: string; codex?: string };
   messages: Message[];
