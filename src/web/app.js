@@ -17,6 +17,8 @@ const state = {
   orchId: null,
   pending: "",
   pendingThink: "",
+  /** 正在跑的每一路发言：runId -> {agent, text, think}。圆桌里会有多个同时存在 */
+  pendingRuns: new Map(),
 };
 
 const $ = (id) => document.getElementById(id);
@@ -196,6 +198,11 @@ function syncPick() {
     b.classList.toggle("on", b.dataset.agent === state.target);
   }
   $("hint").classList.remove("bad");
+  if (state.room) {
+    $("hint").innerHTML =
+      '群聊：<code>@codex</code> / <code>@dsh</code> 指定谁回，不 @ 就两人同时回；谁被对方 @ 到会自动接话（最多两轮）。';
+    return;
+  }
   if (state.target === "dsh") {
     $("hint").innerHTML = state.env.hasKey
       ? '走 <code>dsh headless</code>：任务跑完就退出，输出实时回到时间轴。'
@@ -227,7 +234,8 @@ function setView(v) {
 
 function bubbleHTML(m) {
   const who = m.role === "user" ? "你" : m.agent === "codex" ? "Codex" : "DSH";
-  return `<div class="msg ${m.role}${m.pending ? " pending" : ""}">
+  const cls = m.role === "user" ? "user" : m.agent === "codex" ? "codex" : "dsh";
+  return `<div class="msg ${cls}${m.pending ? " pending" : ""}">
     <div class="msg-head"><span>${who}</span><time>${m.at ? timeOf(m.at) : "正在写…"}</time></div>
     ${
       m.thinking
@@ -242,27 +250,34 @@ function bubbleHTML(m) {
 
 function renderChat() {
   const list = state.thread?.messages ?? [];
+  const live = [...state.pendingRuns.values()];
   const empty =
-    list.length || state.pending
+    list.length || live.length
       ? ""
-      : `<div class="empty"><p>还没有对话</p><span>在下面写一句，交给 dsh headless 跑，回答会实时出现在这里。</span></div>`;
+      : state.room
+        ? `<div class="empty"><p>群里还没人说话</p><span>说一句试试；@codex 或 @dsh 指定谁回，不 @ 就两人都回。</span></div>`
+        : `<div class="empty"><p>还没有对话</p><span>在下面写一句，交给 dsh headless 跑，回答会实时出现在这里。</span></div>`;
   $("chatList").innerHTML =
     empty +
     list.map((m) => bubbleHTML(m)).join("") +
-    (state.pending || state.pendingThink
-      ? bubbleHTML({
+    live
+      .map((p) =>
+        bubbleHTML({
           role: "assistant",
-          text: state.pending,
-          thinking: state.pendingThink || undefined,
+          agent: p.agent,
+          text: p.text,
+          thinking: p.think || undefined,
           pending: true,
-        })
-      : "");
+        }),
+      )
+      .join("");
   $("chatList").scrollTop = $("chatList").scrollHeight;
 }
 
 function threadLabel(t) {
   const title = (t.title || "未命名对话").slice(0, 24);
-  return `${title}（${t.messages} 条）`;
+  const tag = t.mode === "room" ? "群聊 · " : "";
+  return `${tag}${title}（${t.messages} 条）`;
 }
 
 function renderThreadPick() {
@@ -294,22 +309,35 @@ async function openThread(id) {
     if (!t || t.error) return;
     state.threadId = t.id;
     state.thread = t;
+    state.room = t.mode === "room";
     state.pending = "";
     state.pendingThink = "";
+    state.pendingRuns.clear();
+    $("task").placeholder =
+      state.room
+        ? "跟群里说点什么；@codex 或 @dsh 指定谁回，不 @ 就两人同时回"
+        : "派个活：比如「读一遍 src/server.ts，指出三个可改的地方」";
     renderChat();
     renderThreadPick();
+    syncPick();
   } catch {
     // 切不过去就留在原地
   }
 }
 
-function startNewThread() {
+function startNewThread(room = false) {
   state.threadId = null;
-  state.thread = { id: null, title: "", messages: [] };
+  state.thread = { id: null, title: "", messages: [], mode: room ? "room" : "dm" };
+  state.room = room;
   state.pending = "";
   state.pendingThink = "";
+  state.pendingRuns.clear();
+  $("task").placeholder = room
+    ? "跟群里说点什么；@codex 或 @dsh 指定谁回，不 @ 就两人同时回"
+    : "派个活：比如「读一遍 src/server.ts，指出三个可改的地方」";
   renderChat();
   renderThreadPick();
+  syncPick();
   setView("chat");
   $("task").focus();
 }
@@ -318,7 +346,8 @@ $("threadPick").addEventListener("change", (ev) => {
   const id = ev.target.value;
   if (id) openThread(id);
 });
-$("newThread").addEventListener("click", startNewThread);
+$("newThread").addEventListener("click", () => startNewThread(false));
+$("newRoom").addEventListener("click", () => startNewThread(true));
 
 const ORCH_STATE_TEXT = {
   planning: "拆解中",
@@ -538,18 +567,24 @@ for (const btn of document.querySelectorAll(".view")) {
   btn.textContent = "跑着…";
   try {
     const chat = state.view === "chat";
+    const room = chat && state.room;
     const orch = state.view === "orch";
-    const res = await fetch(orch ? "./api/orchestrate" : chat ? "./api/chat" : "./api/task", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(
-        orch
-          ? { task: prompt }
-          : chat
-            ? { threadId: state.threadId, prompt, agent: state.target }
-            : { agent: state.target, prompt },
-      ),
-    });
+    const res = await fetch(
+      orch ? "./api/orchestrate" : room ? "./api/room" : chat ? "./api/chat" : "./api/task",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(
+          orch
+            ? { task: prompt }
+            : room
+              ? { threadId: state.threadId, prompt }
+              : chat
+                ? { threadId: state.threadId, prompt, agent: state.target }
+                : { agent: state.target, prompt },
+        ),
+      },
+    );
     const data = await res.json();
     if (!data.ok) throw new Error(data.error ?? "派活失败");
     $("task").value = "";
@@ -558,6 +593,15 @@ for (const btn of document.querySelectorAll(".view")) {
       state.orch = data.orch;
       renderOrch();
       await loadOrchs();
+    } else if (room) {
+      const isNew = data.threadId && data.threadId !== state.threadId;
+      state.threadId = data.threadId;
+      state.pendingRuns.clear();
+      renderChat();
+      if (isNew) {
+        await loadThreads();
+        await openThread(data.threadId);
+      }
     } else if (chat) {
       const isNew = data.threadId && data.threadId !== state.threadId;
       state.threadId = data.threadId;
@@ -696,18 +740,23 @@ async function boot() {
       renderRuns();
     }
     if (payload.type === "chat-think" && payload.threadId === state.threadId) {
-      state.pendingThink += payload.text;
+      const cur = state.pendingRuns.get(payload.runId) ?? { agent: payload.agent, text: "", think: "" };
+      cur.think += payload.text;
+      state.pendingRuns.set(payload.runId, cur);
       if (state.view === "chat") renderChat();
       return;
     }
     if (payload.type === "chat-delta" && payload.threadId === state.threadId) {
-      state.pending += (state.pending ? "\n" : "") + payload.text;
+      const cur = state.pendingRuns.get(payload.runId) ?? { agent: payload.agent, text: "", think: "" };
+      cur.text += (cur.text ? "\n" : "") + payload.text;
+      state.pendingRuns.set(payload.runId, cur);
       if (state.view === "chat") renderChat();
       return;
     }
     if (payload.type === "thread") {
       state.threadId = payload.thread.id;
       state.thread = payload.thread;
+      state.room = payload.thread.mode === "room";
       state.pending = "";
       state.pendingThink = "";
       if (state.view === "chat") renderChat();

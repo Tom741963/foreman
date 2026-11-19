@@ -885,6 +885,15 @@ h2.mt {
   gap: 6px;
 }
 
+/* 圆桌里两人的发言各自主色，一眼能分清谁在说 */
+.msg.codex .msg-body {
+  border-left: 2px solid var(--codex);
+}
+
+.msg.dsh .msg-body {
+  border-left: 2px solid var(--dsh);
+}
+
 .msg.user {
   align-self: flex-end;
   align-items: flex-end;

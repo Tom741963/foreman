@@ -17,7 +17,7 @@ import { usageForSessionWithRetry } from "./adapters/dsh.ts";
 import { DEFAULT_WORK_DIR, envStatus, listRuns, pruneRuns, startRun, stopRun } from "./runner.ts";
 import type { RunUsage } from "./runner.ts";
 import type { Run, RunAgent, RunEvent } from "./runner.ts";
-import { appendMessage, buildPrompt, listThreads, newThread, readThread } from "./threads.ts";
+import { appendMessage, buildPrompt, buildRoomPrompt, listThreads, newThread, readThread } from "./threads.ts";
 import type { Thread } from "./threads.ts";
 import {
   getOrch,
@@ -203,7 +203,7 @@ function emitRunEvent(run: Run, e: RunEvent): void {
     const bag = runThink.get(run.id) ?? [];
     bag.push(e.text);
     runThink.set(run.id, bag);
-    broadcast({ type: "chat-think", threadId, runId: run.id, text: e.text });
+    broadcast({ type: "chat-think", threadId, runId: run.id, agent: run.agent, text: e.text });
   }
 
   if (threadId && (e.kind === "run/text" || e.kind === "run/err" || e.kind === "run/final")) {
@@ -212,7 +212,7 @@ function emitRunEvent(run: Run, e: RunEvent): void {
     const bag = runText.get(run.id) ?? [];
     bag.push(line);
     runText.set(run.id, bag);
-    broadcast({ type: "chat-delta", threadId, runId: run.id, text: line });
+    broadcast({ type: "chat-delta", threadId, runId: run.id, agent: run.agent, text: line });
   }
 
   if (e.kind === "run/exit") {
@@ -234,6 +234,16 @@ function emitRunEvent(run: Run, e: RunEvent): void {
         agent: run.agent,
       });
       broadcast({ type: "thread", thread: t });
+
+      // 圆桌：对方被 @ 到了就让它接着说，最多自动传两轮
+      if (t.mode === "room") {
+        const other: RunAgent = run.agent === "codex" ? "dsh" : "codex";
+        const hops = roomHops.get(t.id) ?? 0;
+        if (hops < ROOM_MAX_HOPS && new RegExp(`@${other}\\b`, "i").test(text)) {
+          roomHops.set(t.id, hops + 1);
+          startRoomTurn(t, [other]);
+        }
+      }
     }
     runText.delete(run.id);
     runThink.delete(run.id);
@@ -363,6 +373,42 @@ function startAndWait(
     runId = run.id;
     onStart?.(run.id);
   });
+}
+
+/** 圆桌里已经自动接过几次话，防止两个模型互相客气个没完 */
+const roomHops = new Map<string, number>();
+const ROOM_MAX_HOPS = 2;
+/** 群里单次发言的上限：relay 服务过载时会一直重试，不给上限就会永远挂着 */
+const ROOM_TIMEOUT_MS = Number(process.env.FOREMAN_ROOM_TIMEOUT ?? 120_000);
+
+/** 让一组 agent 对着同一条聊天记录各说一句（并行，谁先想好谁先说） */
+function startRoomTurn(t: Thread, agents: RunAgent[]): Run[] {
+  const last = t.messages[t.messages.length - 1];
+  const label = last ? last.text.replace(/\s+/g, " ").slice(0, 60) : "圆桌发言";
+  return agents.map((agent) => {
+    const run = startRun({
+      agent,
+      prompt: buildRoomPrompt(t, agent as "dsh" | "codex", DEFAULT_WORK_DIR),
+      label,
+      onEvent: emitRunEvent,
+    });
+    runThread.set(run.id, t.id);
+    // 超时就掐掉，避免一条卡住的发言把整场对话拖死
+    setTimeout(() => {
+      if (run.state === "running") stopRun(run.id);
+    }, ROOM_TIMEOUT_MS).unref?.();
+    return run;
+  });
+}
+
+/** 从一句话里找出被点名的人；没点名就是大家都说。
+ *  引号里的内容（比如让 codex 复述一句带 @ 的话）不算点名。 */
+function parseMentions(text: string): RunAgent[] {
+  const clean = text.replace(/「[^」]*」|“[^”]*”|"[^"]*"|『[^』]*』/g, " ");
+  const out: RunAgent[] = [];
+  if (/@codex\b/i.test(clean)) out.push("codex");
+  if (/@dsh\b/i.test(clean)) out.push("dsh");
+  return out;
 }
 
 function pushOrch(o: Orchestration): void {
@@ -667,6 +713,35 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (req.method === "POST" && url.pathname === "/api/room") {
+    readJson(req)
+      .then((body) => {
+        const text = (body.prompt ?? "").trim();
+        const threadId = typeof body.threadId === "string" ? body.threadId : "";
+        if (!text) throw new Error("说点什么再发");
+        if (text.length > 4000) throw new Error("太长了（上限 4000 字）");
+
+        const existing = threadId ? readThread(threadId) : null;
+        const t = existing ?? newThread(text);
+        t.mode = "room";
+        appendMessage(t, { role: "user", text, at: Date.now() });
+        roomHops.set(t.id, 0);
+
+        const asked = parseMentions(text);
+        const targets: RunAgent[] = asked.length ? asked : ["codex", "dsh"];
+        const runs = startRoomTurn(t, targets);
+        broadcast({ type: "thread", thread: t });
+
+        res.writeHead(202, { "content-type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: true, threadId: t.id, targets, runs: runs.map(toSummary) }));
+      })
+      .catch((err: Error) => {
+        res.writeHead(400, { "content-type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: false, error: err.message }));
+      });
+    return;
+  }
+
   if (url.pathname === "/api/threads") {
     res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
     res.end(
@@ -674,6 +749,7 @@ const server = http.createServer((req, res) => {
         listThreads().map((t) => ({
           id: t.id,
           title: t.title,
+          mode: t.mode ?? "dm",
           updatedAt: t.updatedAt,
           messages: t.messages.length,
         })),
