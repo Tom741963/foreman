@@ -25,6 +25,9 @@ docs/screenshot.png
 Thumbs.db
 .DS_Store
 
+# 附件（本地临时文件，不进仓库）
+attachments/
+
 # 本机状态
 .env
 *.ndjson
